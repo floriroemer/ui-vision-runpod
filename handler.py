@@ -9,21 +9,25 @@ import base64
 import io
 import re
 from PIL import Image
-from transformers import AutoTokenizer, AutoModel, AutoProcessor
+from transformers import Qwen2VLForConditionalGeneration, AutoProcessor, AutoTokenizer
 
-# Model configuration - UI-TARS-1.5-7B
+# Model configuration - UI-TARS-1.5-7B (Qwen2.5-VL based)
 MODEL_NAME = "ByteDance-Seed/UI-TARS-1.5-7B"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DTYPE = torch.float32
+DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
 print(f"Loading UI-TARS model: {MODEL_NAME}")
 print(f"Device: {DEVICE}, dtype: {DTYPE}")
 
 # Load model globally
 try:
-    # Try using AutoModel with trust_remote_code (UI-TARS may have custom code)
+    # UI-TARS is based on Qwen2.5-VL architecture
+    print("Loading processor...")
     processor = AutoProcessor.from_pretrained(MODEL_NAME, trust_remote_code=True)
-    model = AutoModel.from_pretrained(
+    print("✓ Processor loaded!")
+    
+    print("Loading Qwen2VL model...")
+    model = Qwen2VLForConditionalGeneration.from_pretrained(
         MODEL_NAME,
         torch_dtype=DTYPE,
         device_map="auto",
@@ -32,28 +36,14 @@ try:
     model.eval()
     print("✓ UI-TARS model loaded successfully!")
     print(f"✓ Model type: {type(model)}")
+    tokenizer = None
 except Exception as e:
-    print(f"✗ Failed to load with AutoModel, trying AutoModelForCausalLM: {e}")
-    try:
-        # Fallback to tokenizer if processor doesn't exist
-        from transformers import AutoModelForCausalLM
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
-        model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME,
-            torch_dtype=DTYPE,
-            device_map="auto",
-            trust_remote_code=True
-        )
-        processor = None
-        model.eval()
-        print("✓ UI-TARS model loaded with AutoModelForCausalLM!")
-    except Exception as e2:
-        print(f"✗ Complete failure to load model: {e2}")
-        import traceback
-        traceback.print_exc()
-        model = None
-        processor = None
-        tokenizer = None
+    print(f"✗ Failed to load model: {e}")
+    import traceback
+    traceback.print_exc()
+    model = None
+    processor = None
+    tokenizer = None
 
 
 def extract_coordinates(text, image_width, image_height):

@@ -3,4 +3,5 @@ torch>=2.1.0
 transformers>=4.40.0
 pillow>=10.0.0
 accelerate>=0.27.0
-torchvision
+torchvision>=0.15.0
+qwen-vl-utils>=0.0.4
