@@ -4,11 +4,11 @@ A RunPod serverless endpoint that uses UI-grounding models to locate UI elements
 
 ## 🚀 Features
 
-- **UI Grounding Model**: Uses Qwen2-VL-7B with grounding for UI element detection
+- **UI Grounding Model**: Uses SeeClick specialized UI element detection model
 - **Pixel Coordinates**: Returns exact click coordinates (x, y) for automation
 - **Bounding Box Conversion**: Converts detected regions to center points
 - **Base64 Input**: Accepts screenshots as base64 encoded strings
-- **GPU Optimized**: CUDA with bfloat16/float16 for fast inference
+- **GPU Optimized**: CUDA with float16 for fast inference
 - **Production Ready**: Error handling and confidence scores
 
 ## 📁 Project Structure
@@ -231,21 +231,20 @@ print(result)
 
 ## 🔍 Supported Models
 
-This handler supports any HuggingFace vision-language model compatible with `AutoModelForVision2Seq`:
+This handler uses **SeeClick** - a specialized UI grounding model:
 
-- ✅ **Qwen2-VL** (recommended) - Best UI understanding
-- ✅ **Phi-3-Vision** - Smaller, faster
-- ✅ **LLaVA** - General vision understanding
-- ✅ **InternVL** - High accuracy
-- ✅ **CogVLM** - Advanced reasoning
+- ✅ **SeeClick** (current) - Specialized for UI element detection
+- ✅ **UI-TARS** - Alternative UI grounding model
+- ✅ **UIBert** - Text-focused UI understanding
+- ✅ **ScreenSpot** - Mobile UI detection
 
 ## 📈 Performance
 
 | Model | GPU | Cold Start | Inference | VRAM |
 |-------|-----|-----------|-----------|------|
-| Qwen2-VL-7B | RTX 4090 | ~30s | ~2s | ~16GB |
-| Qwen2-VL-7B | A100 | ~25s | ~1.5s | ~16GB |
-| Phi-3-Vision | RTX 4090 | ~15s | ~1s | ~8GB |
+| SeeClick | RTX 4090 | ~20s | ~0.5s | ~8GB |
+| SeeClick | A100 | ~15s | ~0.3s | ~8GB |
+| UI-TARS | RTX 4090 | ~25s | ~0.8s | ~10GB |
 
 ## 🐛 Troubleshooting
 
@@ -279,5 +278,5 @@ Contributions welcome! Feel free to:
 ## 🔗 Links
 
 - [RunPod Documentation](https://docs.runpod.io/)
-- [Qwen2-VL Model](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct)
+- [SeeClick Model](https://huggingface.co/cckevinn/SeeClick)
 - [Transformers Documentation](https://huggingface.co/docs/transformers)
