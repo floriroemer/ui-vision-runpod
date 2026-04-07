@@ -14,7 +14,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 # Model configuration - UI-TARS-1.5-7B from ByteDance
 MODEL_NAME = "ByteDance-Seed/UI-TARS-1.5-7B"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+DTYPE = torch.float32  # UI-TARS requires full precision
 
 print(f"Loading UI-TARS UI grounding model: {MODEL_NAME}")
 print(f"Device: {DEVICE}, dtype: {DTYPE}")
