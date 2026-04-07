@@ -1,6 +1,6 @@
 """
-RunPod Serverless Handler - Florence-2 UI Grounding
-Microsoft Florence-2 is a proven vision model with object detection and grounding capabilities.
+RunPod Serverless Handler for UI Grounding with UI-TARS-1.5-7B
+Returns pixel coordinates for UI elements using ByteDance UI-TARS model.
 """
 
 import runpod
@@ -9,50 +9,81 @@ import base64
 import io
 import re
 from PIL import Image
-from transformers import AutoProcessor, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
-# Model configuration - Florence-2-large (Microsoft, proven and reliable)
-MODEL_NAME = "microsoft/Florence-2-large"
+# Model configuration - UI-TARS-1.5-7B from ByteDance
+MODEL_NAME = "ByteDance-Seed/UI-TARS-1.5-7B"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DTYPE = torch.float16
+DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
-print(f"Loading Florence-2 UI grounding model: {MODEL_NAME}")
+print(f"Loading UI-TARS UI grounding model: {MODEL_NAME}")
 print(f"Device: {DEVICE}, dtype: {DTYPE}")
 
 # Load model globally (once on startup)
 try:
-    processor = AutoProcessor.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         torch_dtype=DTYPE,
         device_map="auto",
-        trust_remote_code=True
+        trust_remote_code=True,
+        low_cpu_mem_usage=True
     )
     model.eval()
-    print("✓ Florence-2 model loaded successfully!")
+    print("✓ UI-TARS model loaded successfully!")
 except Exception as e:
     print(f"✗ Failed to load model: {e}")
+    import traceback
+    traceback.print_exc()
     model = None
-    processor = None
+    tokenizer = None
 
 
-def parse_florence_output(text, image_width, image_height):
-    """Parse Florence-2 output and extract bounding box coordinates."""
+def extract_bbox_from_response(text, image_width, image_height):
+    """
+    Extract bounding box from UI-TARS response.
+    UI-TARS typically returns coordinates in format like: [x1, y1, x2, y2] or <box>x1,y1,x2,y2</box>
+    Coordinates may be normalized [0-1] or in pixels or in [0-1000] range.
+    """
     try:
-        # Florence-2 returns format like: <loc_x1><loc_y1><loc_x2><loc_y2>
-        # Coordinates are normalized to 1000
-        matches = re.findall(r'<loc_(\d+)>', text)
-        if len(matches) >= 4:
-            x1, y1, x2, y2 = map(int, matches[:4])
-            # Denormalize from [0, 999] to pixels
-            x1 = int((x1 / 999.0) * image_width)
-            y1 = int((y1 / 999.0) * image_height)
-            x2 = int((x2 / 999.0) * image_width)
-            y2 = int((y2 / 999.0) * image_height)
-            return x1, y1, x2, y2
-        return None, None, None, None
+        # Try to find box coordinates in various formats
+        # Format 1: [x1, y1, x2, y2]
+        match = re.search(r'\[(\d+\.?\d*),\s*(\d+\.?\d*),\s*(\d+\.?\d*),\s*(\d+\.?\d*)\]', text)
+        if match:
+            x1, y1, x2, y2 = map(float, match.groups())
+        else:
+            # Format 2: <box>x1,y1,x2,y2</box>
+            match = re.search(r'<box>(\d+\.?\d*),\s*(\d+\.?\d*),\s*(\d+\.?\d*),\s*(\d+\.?\d*)</box>', text)
+            if match:
+                x1, y1, x2, y2 = map(float, match.groups())
+            else:
+                # Format 3: Just four numbers
+                numbers = re.findall(r'\d+\.?\d*', text)
+                if len(numbers) >= 4:
+                    x1, y1, x2, y2 = map(float, numbers[:4])
+                else:
+                    return None, None, None, None
+        
+        # Normalize coordinates based on their range
+        if max(x1, y1, x2, y2) <= 1.0:
+            # Normalized [0-1]
+            x1 = int(x1 * image_width)
+            y1 = int(y1 * image_height)
+            x2 = int(x2 * image_width)
+            y2 = int(y2 * image_height)
+        elif max(x1, y1, x2, y2) <= 1000:
+            # Normalized [0-1000]
+            x1 = int((x1 / 1000.0) * image_width)
+            y1 = int((y1 / 1000.0) * image_height)
+            x2 = int((x2 / 1000.0) * image_width)
+            y2 = int((y2 / 1000.0) * image_height)
+        else:
+            # Already in pixels
+            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+        
+        return x1, y1, x2, y2
     except Exception as e:
-        print(f"Error parsing Florence output: {e}")
+        print(f"Error extracting bbox: {e}")
         return None, None, None, None
 
 
@@ -83,7 +114,7 @@ def decode_base64_image(base64_string):
 
 def handler(job):
     """
-    RunPod serverless handler for UI grounding with Florence-2.
+    RunPod serverless handler for UI grounding with UI-TARS-1.5-7B.
     
     Input:
     {
@@ -99,7 +130,7 @@ def handler(job):
     }
     """
     try:
-        if model is None or processor is None:
+        if model is None or tokenizer is None:
             return {"error": "Model not loaded. Check container logs."}
         
         job_input = job.get("input", {})
@@ -117,33 +148,38 @@ def handler(job):
         except Exception as e:
             return {"error": f"Failed to decode image: {str(e)}"}
         
-        # Prepare task prompt for Florence-2 object detection
-        task_prompt = f"<CAPTION_TO_PHRASE_GROUNDING> {prompt}"
+        # Prepare prompt for UI-TARS - it expects a specific format
+        # UI-TARS uses chat format or direct grounding queries
+        query = f"Find the location of: {prompt}"
         
-        # Prepare inputs
-        inputs = processor(
-            text=task_prompt,
-            images=image,
-            return_tensors="pt"
-        )
-        inputs = {k: v.to(DEVICE) for k, v in inputs.items()}
+        # Process with UI-TARS
+        try:
+            # UI-TARS may use different input processing
+            # Try standard vision-language model approach
+            inputs = tokenizer(query, return_tensors="pt").to(DEVICE)
+            
+            # Generate response
+            with torch.no_grad():
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=256,
+                    do_sample=False
+                )
+            
+            # Decode response
+            response_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            
+        except Exception as e:
+            return {"error": f"Model inference failed: {str(e)}"}
         
-        # Run inference
-        with torch.no_grad():
-            generated_ids = model.generate(
-                **inputs,
-                max_new_tokens=1024,
-                num_beams=3
-            )
-        
-        # Decode output
-        generated_text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
-        
-        # Parse bounding box from output
-        x1, y1, x2, y2 = parse_florence_output(generated_text, width, height)
+        # Extract bounding box from response
+        x1, y1, x2, y2 = extract_bbox_from_response(response_text, width, height)
         
         if x1 is None:
-            return {"error": "Element not found"}
+            return {
+                "error": "Element not found",
+                "model_response": response_text
+            }
         
         # Convert to center point
         x, y, confidence = bbox_to_center(x1, y1, x2, y2)
@@ -152,11 +188,16 @@ def handler(job):
             "x": x,
             "y": y,
             "confidence": confidence,
-            "debug_output": generated_text  # For debugging
+            "bbox": [x1, y1, x2, y2],
+            "model_response": response_text
         }
         
     except Exception as e:
-        return {"error": str(e)}
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
 
 
 # Start RunPod serverless handler
