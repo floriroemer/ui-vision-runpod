@@ -1,6 +1,6 @@
 """
-RunPod Serverless Handler for UI Grounding with SeeClick
-Returns pixel coordinates for UI elements using SeeClick UI grounding model.
+RunPod Serverless Handler for UI Grounding with UI-TARS-1.5-7B
+Returns pixel coordinates for UI elements using ByteDance UI-TARS model.
 """
 
 import runpod
@@ -10,12 +10,12 @@ import io
 from PIL import Image
 from transformers import AutoModel, AutoProcessor
 
-# Model configuration - SeeClick UI grounding model
-MODEL_NAME = "cckevinn/SeeClick"
+# Model configuration - UI-TARS-1.5-7B from ByteDance
+MODEL_NAME = "ByteDance-Seed/UI-TARS-1.5-7B"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.float16
 
-print(f"Loading SeeClick UI grounding model: {MODEL_NAME}")
+print(f"Loading UI-TARS UI grounding model: {MODEL_NAME}")
 print(f"Device: {DEVICE}, dtype: {DTYPE}")
 
 # Load model globally (once on startup)
@@ -28,7 +28,7 @@ try:
         trust_remote_code=True
     )
     model.eval()
-    print("✓ SeeClick model loaded successfully!")
+    print("✓ UI-TARS model loaded successfully!")
 except Exception as e:
     print(f"✗ Failed to load model: {e}")
     model = None
@@ -37,30 +37,47 @@ except Exception as e:
 
 def extract_bbox_from_output(output, image_width, image_height):
     """
-    Extract bounding box from SeeClick model output.
-    SeeClick returns normalized coordinates [x1, y1, x2, y2] in range [0, 1000].
+    Extract bounding box from UI-TARS model output.
+    UI-TARS returns bounding boxes - format may vary, handle multiple cases.
     """
     try:
+        # Case 1: Output has 'boxes' key
         if isinstance(output, dict) and 'boxes' in output:
             boxes = output['boxes']
             if len(boxes) > 0:
                 box = boxes[0]  # Take first detected box
-                x1, y1, x2, y2 = box
-                # Denormalize from [0, 1000] to pixel coordinates
-                x1 = int((x1 / 1000.0) * image_width)
-                y1 = int((y1 / 1000.0) * image_height)
-                x2 = int((x2 / 1000.0) * image_width)
-                y2 = int((y2 / 1000.0) * image_height)
-                return x1, y1, x2, y2
+                # Check if normalized or pixel coordinates
+                if hasattr(box, '__iter__'):
+                    x1, y1, x2, y2 = box[:4]
+                    # If values > 1, assume pixel coords, else normalized
+                    if max(x1, y1, x2, y2) <= 1.0:
+                        x1 = int(x1 * image_width)
+                        y1 = int(y1 * image_height)
+                        x2 = int(x2 * image_width)
+                        y2 = int(y2 * image_height)
+                    else:
+                        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                    return x1, y1, x2, y2
         
-        # Fallback: try to extract from list/tensor
-        if isinstance(output, (list, tuple)) and len(output) >= 4:
-            x1, y1, x2, y2 = output[:4]
-            x1 = int((float(x1) / 1000.0) * image_width)
-            y1 = int((float(y1) / 1000.0) * image_height)
-            x2 = int((float(x2) / 1000.0) * image_width)
-            y2 = int((float(y2) / 1000.0) * image_height)
+        # Case 2: Direct list/tuple/tensor output
+        if hasattr(output, '__iter__') and len(output) >= 4:
+            x1, y1, x2, y2 = [float(x) for x in output[:4]]
+            # Normalize if needed
+            if max(x1, y1, x2, y2) <= 1.0:
+                x1 = int(x1 * image_width)
+                y1 = int(y1 * image_height)
+                x2 = int(x2 * image_width)
+                y2 = int(y2 * image_height)
+            else:
+                x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
             return x1, y1, x2, y2
+        
+        # Case 3: Check for pred_boxes attribute
+        if hasattr(output, 'pred_boxes'):
+            boxes = output.pred_boxes
+            if len(boxes) > 0:
+                x1, y1, x2, y2 = boxes[0]
+                return int(x1), int(y1), int(x2), int(y2)
         
         return None, None, None, None
     except Exception as e:
@@ -99,7 +116,7 @@ def decode_base64_image(base64_string):
 
 def handler(job):
     """
-    RunPod serverless handler for UI grounding with SeeClick.
+    RunPod serverless handler for UI grounding with UI-TARS-1.5-7B.
     
     Input:
     {

@@ -4,7 +4,7 @@ A RunPod serverless endpoint that uses UI-grounding models to locate UI elements
 
 ## 🚀 Features
 
-- **UI Grounding Model**: Uses SeeClick specialized UI element detection model
+- **UI Grounding Model**: Uses UI-TARS-1.5-7B from ByteDance - specialized for UI element detection
 - **Pixel Coordinates**: Returns exact click coordinates (x, y) for automation
 - **Bounding Box Conversion**: Converts detected regions to center points
 - **Base64 Input**: Accepts screenshots as base64 encoded strings
@@ -231,20 +231,20 @@ print(result)
 
 ## 🔍 Supported Models
 
-This handler uses **SeeClick** - a specialized UI grounding model:
+This handler uses **UI-TARS-1.5-7B** from ByteDance - a specialized UI grounding model:
 
-- ✅ **SeeClick** (current) - Specialized for UI element detection
-- ✅ **UI-TARS** - Alternative UI grounding model
-- ✅ **UIBert** - Text-focused UI understanding
-- ✅ **ScreenSpot** - Mobile UI detection
+- ✅ **UI-TARS-1.5-7B** (current) - ByteDance's specialized UI element detection
+- ✅ **Florence-2** - Microsoft's alternative vision model (see handler_florence2.py)
+- ✅ **CogAgent** - THUDM's UI understanding model
+- ✅ **OmniParser** - Icon and element detection
 
 ## 📈 Performance
 
 | Model | GPU | Cold Start | Inference | VRAM |
 |-------|-----|-----------|-----------|------|
-| SeeClick | RTX 4090 | ~20s | ~0.5s | ~8GB |
-| SeeClick | A100 | ~15s | ~0.3s | ~8GB |
-| UI-TARS | RTX 4090 | ~25s | ~0.8s | ~10GB |
+| UI-TARS-1.5-7B | RTX 4090 | ~25s | ~0.6s | ~9GB |
+| UI-TARS-1.5-7B | A100 | ~20s | ~0.4s | ~9GB |
+| Florence-2 | RTX 4090 | ~15s | ~0.3s | ~6GB |
 
 ## 🐛 Troubleshooting
 
@@ -278,5 +278,6 @@ Contributions welcome! Feel free to:
 ## 🔗 Links
 
 - [RunPod Documentation](https://docs.runpod.io/)
-- [SeeClick Model](https://huggingface.co/cckevinn/SeeClick)
+- [UI-TARS-1.5-7B Model](https://huggingface.co/ByteDance-Seed/UI-TARS-1.5-7B)
+- [Florence-2 Alternative](https://huggingface.co/microsoft/Florence-2-large)
 - [Transformers Documentation](https://huggingface.co/docs/transformers)
