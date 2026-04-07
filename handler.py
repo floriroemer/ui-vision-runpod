@@ -59,28 +59,27 @@ def extract_bbox_from_output(output, image_width, image_height):
             x1 = int((float(x1) / 1000.0) * image_width)
             y1 = int((float(y1) / 1000.0) * image_height)
             x2 = int((float(x2) / 1000.0) * image_width)
-            y2 = int((float(y2) /):
+            y2 = int((float(y2) / 1000.0) * image_height)
+            return x1, y1, x2, y2
+        
+        return None, None, None, None
+    except Exception as e:
+        print(f"Error extracting bbox: {e}")
+        return None, None, None, None
+
+
+def bbox_to_center(x1, y1, x2, y2):
     """Convert bounding box to center point coordinates."""
-    center_x = int((x1 + x2) / 2)
-    center_y = int((y1 + y2) / 2)
-    
-    # Calculate confidence based on box validity
-    box_width = abs(x2 - x1)
-    box_height = abs(y2 - y1)
-    
-    if box_width > 0 and box_height > 0:
-        confidence = 0.90
-    else:
-        confidence = 0.50
-        y2 = int(y2 * image_height)
-    
     center_x = int((x1 + x2) / 2)
     center_y = int((y1 + y2) / 2)
     
     # Calculate confidence based on box size (larger boxes = more confident)
     box_area = abs(x2 - x1) * abs(y2 - y1)
-    image_area = image_width * image_height
-    confidence = min(0.95, 0.7 + (box_area / image_area) * 0.25)
+    
+    if box_area > 0:
+        confidence = 0.90
+    else:
+        confidence = 0.50
     
     return center_x, center_y, confidence
 
@@ -100,10 +99,7 @@ def decode_base64_image(base64_string):
 
 def handler(job):
     """
-    RunPod serverless handler for UI grounding.
-    
-    Input:
-    { with SeeClick.
+    RunPod serverless handler for UI grounding with SeeClick.
     
     Input:
     {
@@ -153,10 +149,13 @@ def handler(job):
         x1, y1, x2, y2 = extract_bbox_from_output(outputs, width, height)
         
         if x1 is None:
-            return {"error": "element not found"}
+            return {"error": "Element not found"}
         
         # Convert to center point
-        x, y, confidence = bbox_to_center(x1, y1, x2, y2
+        x, y, confidence = bbox_to_center(x1, y1, x2, y2)
+        
+        return {
+            "x": x,
             "y": y,
             "confidence": confidence
         }
