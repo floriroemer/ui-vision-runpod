@@ -5,11 +5,12 @@ A RunPod serverless endpoint that uses UI-grounding models to locate UI elements
 ## 🚀 Features
 
 - **UI Grounding Model**: Uses UI-TARS-1.5-7B from ByteDance - specialized for UI element detection
+- **Dual Loading Strategy**: Auto-detects processor (VLM) or tokenizer (LLM) architecture
 - **Pixel Coordinates**: Returns exact click coordinates (x, y) for automation
-- **Bounding Box Conversion**: Converts detected regions to center points
-- **Base64 Input**: Accepts screenshots as base64 encoded strings
-- **GPU Optimized**: CUDA with float16 for fast inference
-- **Production Ready**: Error handling and confidence scores
+- **Bounding Box**: Full bbox [x1, y1, x2, y2] + center point
+- **Flexible Input**: Accepts screenshots as base64 encoded strings
+- **Float32 Precision**: Full precision for stable inference
+- **Production Ready**: Comprehensive error handling, logging, and debug output
 
 ## 📁 Project Structure
 
@@ -242,21 +243,28 @@ This handler uses **UI-TARS-1.5-7B** from ByteDance - a specialized UI grounding
 
 | Model | GPU | Cold Start | Inference | VRAM |
 |-------|-----|-----------|-----------|------|
-| UI-TARS-1.5-7B | RTX 4090 | ~25s | ~0.6s | ~9GB |
-| UI-TARS-1.5-7B | A100 | ~20s | ~0.4s | ~9GB |
+| UI-TARS-1.5-7B | RTX 4090 | ~30-40s | ~0.8s | ~14-16GB |
+| UI-TARS-1.5-7B | A100 | ~25-35s | ~0.5s | ~14-16GB |
 | Florence-2 | RTX 4090 | ~15s | ~0.3s | ~6GB |
 
 ## 🐛 Troubleshooting
 
 ### Model not loading
-- Check GPU VRAM (need at least 16GB for 7B models)
-- Try smaller model or quantization
-- Check container logs on RunPod
+- **VRAM**: UI-TARS requires 14-16GB VRAM (use A100 or RTX 4090)
+- **Float32**: Model uses full precision, not bfloat16/float16
+- **Dual Loading**: Handler tries AutoProcessor first, then AutoTokenizer as fallback
+- Check container logs for detailed error messages
 
-### Coordinates not detected
-- Model may need better prompting
-- Try: "Please provide exact pixel coordinates (x, y) for..."
-- Ensure image is clear and element is visible
+### Element not found
+- **Prompt Format**: UI-TARS uses `<grounding> {your prompt}` internally
+- **Be Specific**: Use "login button" not just "button"
+- **Check Response**: `model_response` field shows what model returned
+- Image must be clear and element visible
+
+### Coordinates wrong
+- **Multiple Ranges**: Handler auto-detects [0-1], [0-1000], or pixel coordinates
+- **Returns Both**: Get center point (x, y) AND bbox [x1, y1, x2, y2]
+- Verify with `bbox` field in response
 
 ### Slow cold starts
 - Pre-download model in Dockerfile (uncomment line in Dockerfile)
