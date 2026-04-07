@@ -1,74 +1,77 @@
 """
-RunPod Serverless Handler for UI Grounding
-Returns pixel coordinates for UI elements using specialized UI-grounding model.
+RunPod Serverless Handler for UI Grounding with SeeClick
+Returns pixel coordinates for UI elements using SeeClick UI grounding model.
 """
 
 import runpod
 import torch
 import base64
 import io
-import re
 from PIL import Image
-from transformers import Qwen2VLForConditionalGeneration, AutoTokenizer, AutoProcessor
-from qwen_vl_utils import process_vision_info
+from transformers import AutoModel, AutoProcessor
 
-# Model configuration
-MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
+# Model configuration - SeeClick UI grounding model
+MODEL_NAME = "cckevinn/SeeClick"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DTYPE = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+DTYPE = torch.float16
 
-print(f"Loading UI grounding model: {MODEL_NAME}")
+print(f"Loading SeeClick UI grounding model: {MODEL_NAME}")
 print(f"Device: {DEVICE}, dtype: {DTYPE}")
 
 # Load model globally (once on startup)
 try:
-    model = Qwen2VLForConditionalGeneration.from_pretrained(
+    processor = AutoProcessor.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    model = AutoModel.from_pretrained(
         MODEL_NAME,
         torch_dtype=DTYPE,
         device_map="auto",
         trust_remote_code=True
     )
     model.eval()
-    
-    processor = AutoProcessor.from_pretrained(MODEL_NAME, trust_remote_code=True)
-    print("✓ UI grounding model loaded successfully!")
+    print("✓ SeeClick model loaded successfully!")
 except Exception as e:
     print(f"✗ Failed to load model: {e}")
     model = None
     processor = None
 
 
-def parse_bbox_from_text(text):
+def extract_bbox_from_output(output, image_width, image_height):
     """
-    Extract bounding box coordinates from model output.
-    Looks for patterns like: <box>(x1,y1),(x2,y2)</box> or <ref>element</ref><box>coordinates</box>
+    Extract bounding box from SeeClick model output.
+    SeeClick returns normalized coordinates [x1, y1, x2, y2] in range [0, 1000].
     """
-    # Try to find bounding box pattern
-    box_pattern = r'<box>\s*\(?\s*(\d+)\s*,\s*(\d+)\s*\)?\s*,?\s*\(?\s*(\d+)\s*,\s*(\d+)\s*\)?\s*</box>'
-    match = re.search(box_pattern, text)
-    
-    if match:
-        x1, y1, x2, y2 = map(int, match.groups())
-        return x1, y1, x2, y2
-    
-    # Try normalized coordinates pattern [x1, y1, x2, y2]
-    norm_pattern = r'\[\s*(\d+\.?\d*)\s*,\s*(\d+\.?\d*)\s*,\s*(\d+\.?\d*)\s*,\s*(\d+\.?\d*)\s*\]'
-    match = re.search(norm_pattern, text)
-    
-    if match:
-        coords = [float(x) for x in match.groups()]
-        return coords[0], coords[1], coords[2], coords[3]
-    
-    return None, None, None, None
-
-
-def bbox_to_center(x1, y1, x2, y2, image_width, image_height):
+    try:
+        if isinstance(output, dict) and 'boxes' in output:
+            boxes = output['boxes']
+            if len(boxes) > 0:
+                box = boxes[0]  # Take first detected box
+                x1, y1, x2, y2 = box
+                # Denormalize from [0, 1000] to pixel coordinates
+                x1 = int((x1 / 1000.0) * image_width)
+                y1 = int((y1 / 1000.0) * image_height)
+                x2 = int((x2 / 1000.0) * image_width)
+                y2 = int((y2 / 1000.0) * image_height)
+                return x1, y1, x2, y2
+        
+        # Fallback: try to extract from list/tensor
+        if isinstance(output, (list, tuple)) and len(output) >= 4:
+            x1, y1, x2, y2 = output[:4]
+            x1 = int((float(x1) / 1000.0) * image_width)
+            y1 = int((float(y1) / 1000.0) * image_height)
+            x2 = int((float(x2) / 1000.0) * image_width)
+            y2 = int((float(y2) /):
     """Convert bounding box to center point coordinates."""
-    # Handle normalized coordinates (0-1 range)
-    if x1 <= 1.0 and x2 <= 1.0 and y1 <= 1.0 and y2 <= 1.0:
-        x1 = int(x1 * image_width)
-        x2 = int(x2 * image_width)
-        y1 = int(y1 * image_height)
+    center_x = int((x1 + x2) / 2)
+    center_y = int((y1 + y2) / 2)
+    
+    # Calculate confidence based on box validity
+    box_width = abs(x2 - x1)
+    box_height = abs(y2 - y1)
+    
+    if box_width > 0 and box_height > 0:
+        confidence = 0.90
+    else:
+        confidence = 0.50
         y2 = int(y2 * image_height)
     
     center_x = int((x1 + x2) / 2)
@@ -100,8 +103,11 @@ def handler(job):
     RunPod serverless handler for UI grounding.
     
     Input:
+    { with SeeClick.
+    
+    Input:
     {
-        "prompt": "Click the login button",
+        "prompt": "login button",
         "image": "<base64>"
     }
     
@@ -131,70 +137,26 @@ def handler(job):
         except Exception as e:
             return {"error": f"Failed to decode image: {str(e)}"}
         
-        # Grounding prompt for bounding box detection
-        grounding_prompt = f"""In this {width}x{height} screenshot, locate the UI element: {prompt}
-
-Provide the bounding box coordinates in the format: <box>(x1,y1),(x2,y2)</box> where:
-- x1,y1 is top-left corner
-- x2,y2 is bottom-right corner
-- Coordinates are in pixels"""
-        
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": image},
-                    {"type": "text", "text": grounding_prompt}
-                ]
-            }
-        ]
-        
-        text = processor.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
-        )
-        
-        image_inputs, video_inputs = process_vision_info(messages)
-        
+        # Prepare inputs for SeeClick
         inputs = processor(
-            text=[text],
-            images=image_inputs,
-            videos=video_inputs,
-            padding=True,
+            images=image,
+            text=prompt,
             return_tensors="pt"
         )
-        inputs = inputs.to(DEVICE)
+        inputs = {k: v.to(DEVICE) for k, v in inputs.items()}
         
+        # Run inference
         with torch.no_grad():
-            generated_ids = model.generate(
-                **inputs,
-                max_new_tokens=256,
-                do_sample=False
-            )
+            outputs = model(**inputs)
         
-        generated_ids_trimmed = [
-            out_ids[len(in_ids):] 
-            for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-        ]
-        
-        output_text = processor.batch_decode(
-            generated_ids_trimmed,
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=False
-        )[0]
-        
-        # Parse bounding box
-        x1, y1, x2, y2 = parse_bbox_from_text(output_text)
+        # Extract bounding box from output
+        x1, y1, x2, y2 = extract_bbox_from_output(outputs, width, height)
         
         if x1 is None:
             return {"error": "element not found"}
         
         # Convert to center point
-        x, y, confidence = bbox_to_center(x1, y1, x2, y2, width, height)
-        
-        return {
-            "x": x,
+        x, y, confidence = bbox_to_center(x1, y1, x2, y2
             "y": y,
             "confidence": confidence
         }
