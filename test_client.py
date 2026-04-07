@@ -56,24 +56,17 @@ def test_ui_vision(image_path, prompt):
         
         # Display results
         print("\n" + "="*60)
-        print("📊 RESULTS")
+        print("📊 UI GROUNDING RESULTS")
         print("="*60)
         
-        if result.get("status") == "success":
-            print(f"✓ Status: {result['status']}")
-            print(f"\n📍 Coordinates:")
-            print(f"   X: {result['x']}")
-            print(f"   Y: {result['y']}")
-            print(f"\n📝 Description:")
-            print(f"   {result['description']}")
-            
-            if 'image_size' in result:
-                size = result['image_size']
-                print(f"\n🖼️  Image Size: {size['width']}x{size['height']}")
+        if 'error' in result:
+            print(f"❌ Error: {result['error']}")
         else:
-            print(f"✗ Status: {result.get('status', 'unknown')}")
-            if 'error' in result:
-                print(f"❌ Error: {result['error']}")
+            print(f"✓ Element found")
+            print(f"\n📍 Click Coordinates:")
+            print(f"   X: {result.get('x', 'N/A')}")
+            print(f"   Y: {result.get('y', 'N/A')}")
+            print(f"\n🎯 Confidence: {result.get('confidence', 0.0):.2%}")
         
         print("\n" + "="*60)
         
@@ -108,18 +101,19 @@ def main():
         print(f"❌ Image not found: {image_path}")
         sys.exit(1)
     
-    prompt = input("💬 Enter your question (e.g., 'Where is the login button?'): ").strip()
+    prompt = input(\"💬 Enter UI element to locate (e.g., 'login button'): \").strip()
     
     if not prompt:
-        prompt = "Where is the main button on this screen?"
+        prompt = \"submit button\"
     
     # Run test
     result = test_ui_vision(image_path, prompt)
     
-    if result and result.get("status") == "success":
-        print("\n✅ Test completed successfully!")
+    if result and 'x' in result and 'y' in result:
+        print(\"\\n✅ UI grounding successful!\")
+        print(f\"\\n🖱️  You can now click at ({result['x']}, {result['y']})\")
     else:
-        print("\n❌ Test failed!")
+        print(\"\\n❌ Could not locate element!\")
 
 
 if __name__ == "__main__":

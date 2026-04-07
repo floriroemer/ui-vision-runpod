@@ -1,14 +1,15 @@
-# UI Vision Analysis - RunPod Serverless
+# UI Grounding - RunPod Serverless
 
-A RunPod serverless endpoint that uses vision-language models to analyze UI screenshots and return coordinates of UI elements based on natural language prompts.
+A RunPod serverless endpoint that uses UI-grounding models to locate UI elements and return precise pixel coordinates for automation.
 
 ## 🚀 Features
 
-- **Vision-Language Model**: Uses Qwen2-VL-7B-Instruct for UI understanding
-- **Coordinate Detection**: Returns precise (x, y) coordinates of UI elements
-- **Base64 Input**: Accepts images as base64 encoded strings
-- **GPU Optimized**: Runs on CUDA with FP16 for fast inference
-- **Production Ready**: Error handling, validation, and structured responses
+- **UI Grounding Model**: Uses Qwen2-VL-7B with grounding for UI element detection
+- **Pixel Coordinates**: Returns exact click coordinates (x, y) for automation
+- **Bounding Box Conversion**: Converts detected regions to center points
+- **Base64 Input**: Accepts screenshots as base64 encoded strings
+- **GPU Optimized**: CUDA with bfloat16/float16 for fast inference
+- **Production Ready**: Error handling and confidence scores
 
 ## 📁 Project Structure
 
@@ -71,7 +72,7 @@ endpoint = runpod.Endpoint("YOUR_ENDPOINT_ID")
 result = endpoint.run_sync(
     {
         "input": {
-            "prompt": "Where is the login button?",
+            "prompt": "login button",
             "image": image_base64
         }
     },
@@ -83,8 +84,7 @@ print(result)
 # {
 #   "x": 450,
 #   "y": 320,
-#   "description": "The login button is located at coordinates (450, 320)...",
-#   "status": "success"
+#   "confidence": 0.89
 # }
 ```
 
@@ -133,6 +133,7 @@ headers = {
 payload = {
     "input": {
         "prompt": "Where is the submit button?",
+        "image": imsubmit button",
         "image": image_base64
     }
 }
@@ -141,17 +142,15 @@ payload = {
 response = requests.post(ENDPOINT_URL, headers=headers, json=payload)
 result = response.json()
 
-print(f"Coordinates: ({result['x']}, {result['y']})")
-print(f"Description: {result['description']}")
-```
+print(f"Click at: ({result['x']}, {result['y']})")
+print(f"Confidence: {result['confidence']:.2%
 
 ## 📊 Input/Output Format
 
 ### Input
 
 ```json
-{
-  "prompt": "Where is the login button?",
+{login button",
   "image": "<base64 encoded PNG/JPG>"
 }
 ```
@@ -162,13 +161,7 @@ print(f"Description: {result['description']}")
 {
   "x": 450,
   "y": 320,
-  "description": "The login button is located at the center-bottom of the screen...",
-  "raw_response": "Full model response text",
-  "image_size": {
-    "width": 1920,
-    "height": 1080
-  },
-  "status": "success"
+  "confidence": 0.89
 }
 ```
 
@@ -176,7 +169,7 @@ print(f"Description: {result['description']}")
 
 ```json
 {
-  "error": "Error message",
+  "error": "element not founmessage",
   "status": "failed"
 }
 ```

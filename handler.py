@@ -1,70 +1,90 @@
 """
-RunPod Serverless Handler for UI Vision Analysis
-Analyzes UI screenshots and returns coordinates of UI elements based on natural language prompts.
+RunPod Serverless Handler for UI Grounding
+Returns pixel coordinates for UI elements using specialized UI-grounding model.
 """
 
 import runpod
 import torch
 import base64
 import io
-import json
 import re
 from PIL import Image
-from transformers import AutoProcessor, AutoModelForVision2Seq
+from transformers import Qwen2VLForConditionalGeneration, AutoTokenizer, AutoProcessor
+from qwen_vl_utils import process_vision_info
 
 # Model configuration
 MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DTYPE = torch.float16
+DTYPE = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
-print(f"Loading model: {MODEL_NAME}")
+print(f"Loading UI grounding model: {MODEL_NAME}")
 print(f"Device: {DEVICE}, dtype: {DTYPE}")
 
-# Load model and processor globally (only once on container startup)
+# Load model globally (once on startup)
 try:
-    processor = AutoProcessor.from_pretrained(MODEL_NAME, trust_remote_code=True)
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = Qwen2VLForConditionalGeneration.from_pretrained(
         MODEL_NAME,
         torch_dtype=DTYPE,
         device_map="auto",
         trust_remote_code=True
     )
     model.eval()
-    print("✓ Model loaded successfully!")
+    
+    processor = AutoProcessor.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    print("✓ UI grounding model loaded successfully!")
 except Exception as e:
     print(f"✗ Failed to load model: {e}")
-    processor = None
     model = None
+    processor = None
 
 
-def parse_coordinates(text):
+def parse_bbox_from_text(text):
     """
-    Extract x, y coordinates from model output.
-    Looks for patterns like: "coordinates: (x, y)" or "x: 100, y: 200" or "[100, 200]"
+    Extract bounding box coordinates from model output.
+    Looks for patterns like: <box>(x1,y1),(x2,y2)</box> or <ref>element</ref><box>coordinates</box>
     """
-    # Try various coordinate patterns
-    patterns = [
-        r'\((\d+),\s*(\d+)\)',           # (x, y)
-        r'\[(\d+),\s*(\d+)\]',           # [x, y]
-        r'x[:\s]*(\d+).*?y[:\s]*(\d+)',  # x: 100 y: 200
-        r'(\d+)\s*,\s*(\d+)',            # 100, 200
-    ]
+    # Try to find bounding box pattern
+    box_pattern = r'<box>\s*\(?\s*(\d+)\s*,\s*(\d+)\s*\)?\s*,?\s*\(?\s*(\d+)\s*,\s*(\d+)\s*\)?\s*</box>'
+    match = re.search(box_pattern, text)
     
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            x = int(match.group(1))
-            y = int(match.group(2))
-            return x, y
+    if match:
+        x1, y1, x2, y2 = map(int, match.groups())
+        return x1, y1, x2, y2
     
-    # If no coordinates found, return None
-    return None, None
+    # Try normalized coordinates pattern [x1, y1, x2, y2]
+    norm_pattern = r'\[\s*(\d+\.?\d*)\s*,\s*(\d+\.?\d*)\s*,\s*(\d+\.?\d*)\s*,\s*(\d+\.?\d*)\s*\]'
+    match = re.search(norm_pattern, text)
+    
+    if match:
+        coords = [float(x) for x in match.groups()]
+        return coords[0], coords[1], coords[2], coords[3]
+    
+    return None, None, None, None
+
+
+def bbox_to_center(x1, y1, x2, y2, image_width, image_height):
+    """Convert bounding box to center point coordinates."""
+    # Handle normalized coordinates (0-1 range)
+    if x1 <= 1.0 and x2 <= 1.0 and y1 <= 1.0 and y2 <= 1.0:
+        x1 = int(x1 * image_width)
+        x2 = int(x2 * image_width)
+        y1 = int(y1 * image_height)
+        y2 = int(y2 * image_height)
+    
+    center_x = int((x1 + x2) / 2)
+    center_y = int((y1 + y2) / 2)
+    
+    # Calculate confidence based on box size (larger boxes = more confident)
+    box_area = abs(x2 - x1) * abs(y2 - y1)
+    image_area = image_width * image_height
+    confidence = min(0.95, 0.7 + (box_area / image_area) * 0.25)
+    
+    return center_x, center_y, confidence
 
 
 def decode_base64_image(base64_string):
     """Decode base64 image string to PIL Image."""
     try:
-        # Remove data URL prefix if present
         if ',' in base64_string:
             base64_string = base64_string.split(',')[1]
         
@@ -77,92 +97,82 @@ def decode_base64_image(base64_string):
 
 def handler(job):
     """
-    RunPod serverless handler function.
+    RunPod serverless handler for UI grounding.
     
-    Expected input:
+    Input:
     {
-        "prompt": "Where is the login button?",
-        "image": "<base64 encoded image>"
+        "prompt": "Click the login button",
+        "image": "<base64>"
     }
     
-    Returns:
+    Output:
     {
         "x": int,
         "y": int,
-        "description": str,
-        "raw_response": str
+        "confidence": float
     }
     """
     try:
-        # Validate model is loaded
         if model is None or processor is None:
-            return {
-                "error": "Model not loaded. Check container logs.",
-                "status": "failed"
-            }
+            return {"error": "Model not loaded. Check container logs."}
         
-        # Get input from job
         job_input = job.get("input", {})
         prompt = job_input.get("prompt")
         base64_image = job_input.get("image")
         
-        # Validate inputs
         if not prompt:
-            return {"error": "Missing 'prompt' in input", "status": "failed"}
+            return {"error": "Missing 'prompt' in input"}
         if not base64_image:
-            return {"error": "Missing 'image' in input", "status": "failed"}
+            return {"error": "Missing 'image' in input"}
         
-        # Decode image
         try:
             image = decode_base64_image(base64_image)
             width, height = image.size
         except Exception as e:
-            return {"error": f"Failed to decode image: {str(e)}", "status": "failed"}
+            return {"error": f"Failed to decode image: {str(e)}"}
         
-        # Prepare enhanced prompt for coordinate extraction
-        enhanced_prompt = f"""You are analyzing a UI screenshot that is {width}x{height} pixels.
+        # Grounding prompt for bounding box detection
+        grounding_prompt = f"""In this {width}x{height} screenshot, locate the UI element: {prompt}
 
-User question: {prompt}
-
-Please identify the UI element and provide its approximate center coordinates in the format: (x, y)
-Where x is the horizontal position (0 to {width}) and y is the vertical position (0 to {height}).
-
-Respond with the coordinates and a brief description."""
+Provide the bounding box coordinates in the format: <box>(x1,y1),(x2,y2)</box> where:
+- x1,y1 is top-left corner
+- x2,y2 is bottom-right corner
+- Coordinates are in pixels"""
         
-        # Prepare inputs for the model
         messages = [
             {
                 "role": "user",
                 "content": [
                     {"type": "image", "image": image},
-                    {"type": "text", "text": enhanced_prompt}
+                    {"type": "text", "text": grounding_prompt}
                 ]
             }
         ]
         
-        # Process inputs
         text = processor.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=True
         )
         
+        image_inputs, video_inputs = process_vision_info(messages)
+        
         inputs = processor(
             text=[text],
-            images=[image],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
             return_tensors="pt"
         )
-        inputs = {k: v.to(DEVICE) for k, v in inputs.items()}
+        inputs = inputs.to(DEVICE)
         
-        # Generate response
         with torch.no_grad():
             generated_ids = model.generate(
                 **inputs,
-                max_new_tokens=512,
+                max_new_tokens=256,
                 do_sample=False
             )
         
-        # Decode output
         generated_ids_trimmed = [
             out_ids[len(in_ids):] 
             for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -174,26 +184,23 @@ Respond with the coordinates and a brief description."""
             clean_up_tokenization_spaces=False
         )[0]
         
-        # Parse coordinates from output
-        x, y = parse_coordinates(output_text)
+        # Parse bounding box
+        x1, y1, x2, y2 = parse_bbox_from_text(output_text)
         
-        # Prepare response
-        response = {
-            "x": x if x is not None else -1,
-            "y": y if y is not None else -1,
-            "description": output_text.strip(),
-            "raw_response": output_text,
-            "image_size": {"width": width, "height": height},
-            "status": "success" if x is not None else "no_coordinates_found"
+        if x1 is None:
+            return {"error": "element not found"}
+        
+        # Convert to center point
+        x, y, confidence = bbox_to_center(x1, y1, x2, y2, width, height)
+        
+        return {
+            "x": x,
+            "y": y,
+            "confidence": confidence
         }
-        
-        return response
         
     except Exception as e:
-        return {
-            "error": str(e),
-            "status": "failed"
-        }
+        return {"error": str(e)}
 
 
 # Start RunPod serverless handler
